@@ -1,0 +1,57 @@
+# %shnetworklevel_exp% La quantité d'exp du joueur
+# %shnetworklevel_level% Le niveau du joueur
+# %shnetworklevel_expneeded% Le total d’exp nécessaire pour passer au niveau suivant
+# %shnetworklevel_progressbar% Une barre de progression visuelle basée sur la quantité d’exp actuelle par rapport au seuil requis
+
+# Paramètres de connexion à MariaDB
+database:
+  # host: 138.201.251.202
+  host: 127.0.0.1
+  port: 3306
+  database: Global?autoReconnect=true&useSSL=false
+  username: utilisateur
+  password: "CHANGE_ME"
+
+# Messages et usages configurables
+messages:
+  no-permission: "&8&l« &f&lSH &8&l» &fCommande inconnue, essayer autre chose."
+  invalid-number: "&cLe nombre fourni est invalide."
+  usage:
+    main: "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel <exp/level/info> ..."
+    exp: "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel exp <give/take/set> <player> <number>"
+    level: "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel level <give/take/set> <player> <number>"
+    info: "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel info <player>"
+  exp-given: "&7&l« &a&lSH &8&l» &7Vous avez donné &a%amount% exp de network &7à &a%player%"
+  exp-taken: "&7&l« &6&lSH &8&l» &7Vous avez retiré &6%amount% exp &7à &6%player%"
+  exp-set: "&7&l« &6&lSH &8&l» &7L'exp de &6%player% &7a été définie à &6%amount%"
+  level-given: "&7&l« &a&lSH &8&l» &7Vous avez donné &a%amount% niveaux &7à &a%player%"
+  level-taken: "&7&l« &6&lSH &8&l» &7Vous avez retiré &6%amount% niveaux &7à &6%player%"
+  level-set: "&7&l« &6&lSH &8&l» &7Le niveau de &6%player% &7est défini à &6%amount%"
+  level-up: "&7&l« &5&lSH &8&l» &fFélicitations &5%player% &f! Vous avez gagné un &5niveau de network&f ! &7(/network)"
+  info: "&7&l« &e&lSH &8&l» &e%player% &7est niveau &e%level% &7avec &e%exp% exp"
+
+# Variables de progression
+progression:
+  type: "exponential"        # "linear" ou "exponential"
+  base: 100
+  increment: 50         # pour la progression linéaire
+  multiplier: 1.50       # pour la progression exponentielle
+
+# Commandes de récompense lors d'un level-up
+rewards:
+  levelup-commands: # Variables: %player% et %level%
+    - "bungeee lpb user %player% permission set ajqueue.priority.%level%"
+
+# Configuration du son de level-up
+sounds:
+  levelup:
+    sound: "BLOCK_BELL_RESONATE"
+    volume: 1.0
+    pitch: 2.0
+
+# Configuration de la progress bar
+Progress-bar:
+  Amount: 15
+  Character: "■"
+  Complete: "&5"
+  Remaining: "&7"
