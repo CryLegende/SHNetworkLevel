@@ -7,18 +7,25 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Locale;
+import java.util.Set;
 import java.util.UUID; // Importation nécessaire pour getUniqueId
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
+import org.bukkit.NamespacedKey;
 import org.bukkit.OfflinePlayer;
+import org.bukkit.Registry;
 import org.bukkit.Sound;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Listener;
 import org.bukkit.event.EventHandler;
+import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -30,6 +37,9 @@ public class SHNetworkLevel extends JavaPlugin {
     private HikariDataSource dataSource;
     // Cache en mémoire des données des joueurs (clé : nom du joueur)
     private ConcurrentHashMap<String, PlayerData> playerCache = new ConcurrentHashMap<>();
+    // Noms dont le chargement est en cours (PlaceholderAPI sur le thread principal)
+    private final Set<String> loading = ConcurrentHashMap.newKeySet();
+    private SHNetworkLevelPlaceholderExpansion expansion;
 
     @Override
     public void onEnable() {
@@ -83,13 +93,19 @@ public class SHNetworkLevel extends JavaPlugin {
 
         // Hook sur PlaceholderAPI s'il est présent
         if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
-            new SHNetworkLevelPlaceholderExpansion(this).register();
+            expansion = new SHNetworkLevelPlaceholderExpansion(this);
+            expansion.register();
             getLogger().info("Hook PlaceholderAPI enregistré.");
         }
     }
 
     @Override
     public void onDisable() {
+        // persist() garde l'expansion chez PlaceholderAPI : sans désinscription elle continuerait à interroger un pool fermé
+        if (expansion != null) {
+            expansion.unregister();
+            expansion = null;
+        }
         // Fermeture propre du pool de connexions
         if (dataSource != null && !dataSource.isClosed()) {
             dataSource.close();
@@ -234,6 +250,7 @@ public class SHNetworkLevel extends JavaPlugin {
                             }
                         }
                     }
+                    evictIfOffline(target, playerName);
                 });
             });
             return true;
@@ -345,6 +362,7 @@ public class SHNetworkLevel extends JavaPlugin {
                             }
                         }
                     }
+                    evictIfOffline(target, playerName);
                 });
             });
             return true;
@@ -381,6 +399,7 @@ public class SHNetworkLevel extends JavaPlugin {
 
                 Bukkit.getScheduler().runTask(this, () -> {
                     sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedMsg));
+                    evictIfOffline(target, playerName);
                 });
             });
             return true;
@@ -400,12 +419,20 @@ public class SHNetworkLevel extends JavaPlugin {
         if (type.equalsIgnoreCase("exponential")) {
             double base = config.getDouble("progression.base", 100);
             double multiplier = config.getDouble("progression.multiplier", 1.1);
-            return (int) Math.round(base * Math.pow(multiplier, Math.max(0, level))); // Assurer level >= 0
+            return clampExp(Math.round(base * Math.pow(multiplier, Math.max(0, level)))); // Assurer level >= 0
         } else { // linear par défaut
             double base = config.getDouble("progression.base", 100);
             double increment = config.getDouble("progression.increment", 50);
-            return (int) Math.round(base + (Math.max(0, level) * increment)); // Assurer level >= 0
+            return clampExp(Math.round(base + (Math.max(0, level) * increment))); // Assurer level >= 0
         }
+    }
+
+    /**
+     * Le cast (int) d'un long tronque : au-delà de ~2 milliards d'exp (niveau 42 en exponentiel) le seuil devenait
+     * négatif ou minuscule, et la boucle de montée de niveau ne se terminait plus.
+     */
+    private static int clampExp(long exp) {
+        return (int) Math.max(1L, Math.min(Integer.MAX_VALUE, exp));
     }
 
     /**
@@ -481,8 +508,9 @@ public class SHNetworkLevel extends JavaPlugin {
      * si elle est appelée depuis le thread principal et que le joueur n'est pas en cache.
      */
     public PlayerData getPlayerData(String playerName) { // Rendre 'public' pour PlaceholderAPI si besoin, sinon 'private'
-        if (playerCache.containsKey(playerName)) {
-            return playerCache.get(playerName);
+        PlayerData cached = playerCache.get(playerName);
+        if (cached != null) {
+            return cached;
         }
         PlayerData data = new PlayerData();
         try (Connection connection = dataSource.getConnection();
@@ -520,6 +548,40 @@ public class SHNetworkLevel extends JavaPlugin {
     }
 
     /**
+     * Pour PlaceholderAPI : jamais de requête SQL sur le thread principal. Un joueur pas encore en cache est
+     * chargé en tâche de fond (valeurs par défaut en attendant) ; les autres threads lisent directement la base.
+     */
+    private PlayerData cachedData(String playerName) {
+        PlayerData cached = playerCache.get(playerName);
+        if (cached != null) {
+            return cached;
+        }
+        if (!Bukkit.isPrimaryThread()) {
+            return getPlayerData(playerName);
+        }
+        if (isEnabled() && loading.add(playerName)) {
+            Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+                try {
+                    getPlayerData(playerName);
+                } finally {
+                    loading.remove(playerName);
+                }
+            });
+        }
+        return new PlayerData();
+    }
+
+    /**
+     * Un joueur hors ligne ne reçoit pas d'événement de départ : son entrée de cache serait périmée dès qu'il
+     * change de niveau sur un autre serveur du réseau.
+     */
+    private void evictIfOffline(OfflinePlayer target, String playerName) {
+        if (!target.isOnline()) {
+            playerCache.remove(playerName);
+        }
+    }
+
+    /**
      * Classe interne pour stocker les données d'un joueur.
      */
     private class PlayerData {
@@ -537,6 +599,21 @@ public class SHNetworkLevel extends JavaPlugin {
      * Listener pour charger/décharger les données des joueurs lors de leur connexion/déconnexion.
      */
     private class PlayerListener implements Listener {
+        @EventHandler(priority = org.bukkit.event.EventPriority.MONITOR)
+        public void onPreLogin(AsyncPlayerPreLoginEvent event) {
+            if (event.getLoginResult() != AsyncPlayerPreLoginEvent.Result.ALLOWED) {
+                return;
+            }
+            // Thread asynchrone : les données sont en cache avant le premier placeholder. Attente bornée pour
+            // qu'une base indisponible ne retarde pas la connexion (le chargement continue alors en arrière-plan).
+            CompletableFuture<PlayerData> future = CompletableFuture.supplyAsync(() -> getPlayerData(event.getName()));
+            try {
+                future.get(2, TimeUnit.SECONDS);
+            } catch (Exception ignored) {
+                // Repris par onJoin
+            }
+        }
+
         @EventHandler
         public void onJoin(PlayerJoinEvent event) {
             final String playerName = event.getPlayer().getName();
@@ -544,6 +621,10 @@ public class SHNetworkLevel extends JavaPlugin {
             Bukkit.getScheduler().runTaskAsynchronously(SHNetworkLevel.this, () -> {
                 getPlayerData(playerName); // Cela va charger depuis la DB et mettre en cache si pas déjà fait
                 getLogger().info("Données chargées pour " + playerName + " lors de la connexion.");
+                // Parti pendant le chargement : l'événement de départ est déjà passé, l'entrée resterait en cache
+                if (!event.getPlayer().isOnline()) {
+                    playerCache.remove(playerName);
+                }
             });
         }
 
@@ -567,11 +648,28 @@ public class SHNetworkLevel extends JavaPlugin {
         String soundName = getConfig().getString("sounds.levelup.sound", "ENTITY_PLAYER_LEVELUP");
         float volume = (float) getConfig().getDouble("sounds.levelup.volume", 1.0);
         float pitch = (float) getConfig().getDouble("sounds.levelup.pitch", 1.0);
-        try {
-            Sound sound = Sound.valueOf(soundName.toUpperCase());
+        Sound sound = sound(soundName);
+        if (sound != null) {
             player.playSound(player.getLocation(), sound, volume, pitch);
-        } catch (IllegalArgumentException ex) {
+        } else {
             getLogger().warning("Le son configuré pour le levelup est invalide: " + soundName);
+        }
+    }
+
+    /**
+     * Son lu en config : ancien nom (ENTITY_PLAYER_LEVELUP) ou clé (minecraft:entity.player.levelup).
+     */
+    static Sound sound(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        String s = raw.trim();
+        if (s.indexOf(':') >= 0 || s.indexOf('.') >= 0) {
+            NamespacedKey key = NamespacedKey.fromString(s.toLowerCase(Locale.ROOT));
+            return key == null ? null : Registry.SOUND_EVENT.get(key);
+        }
+        try {
+            return (Sound) Sound.class.getField(s.toUpperCase(Locale.ROOT)).get(null);
+        } catch (ReflectiveOperationException | ClassCastException e) {
+            return null;
         }
     }
 
@@ -609,7 +707,7 @@ public class SHNetworkLevel extends JavaPlugin {
 
         @Override
         public String getVersion() {
-            return plugin.getDescription().getVersion();
+            return plugin.getPluginMeta().getVersion();
         }
 
         @Override
@@ -617,10 +715,8 @@ public class SHNetworkLevel extends JavaPlugin {
             if (player == null || player.getName() == null) { // Vérification plus robuste
                 return "";
             }
-            // Cette ligne peut potentiellement causer du lag si les données ne sont pas en cache
-            // car getPlayerData fera un appel DB synchrone.
-            // Laisser tel quel selon la demande.
-            PlayerData data = plugin.getPlayerData(player.getName());
+            // Pas d'appel DB sur le thread principal : voir cachedData
+            PlayerData data = plugin.cachedData(player.getName());
 
             if (identifier.equalsIgnoreCase("level")) {
                 return String.valueOf(data.level);
