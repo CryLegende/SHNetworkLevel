@@ -327,6 +327,12 @@ public class SHNetworkLevel extends JavaPlugin {
                     databaseError(sender, playerName, e);
                     return;
                 }
+                if (done == null) {
+                    Bukkit.getScheduler().runTask(this, () -> {
+                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', getConfig().getString(usageKey, usageDefault)));
+                    });
+                    return;
+                }
                 oldLevel = done.oldLevel();
                 newLevel = done.level();
             } else {
