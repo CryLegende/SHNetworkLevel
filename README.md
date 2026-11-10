@@ -18,11 +18,40 @@ Niveau de network partagé entre les serveurs (exp et niveaux en MariaDB), avec 
 
 Utilisé sur : **Opale · Lobby**.
 
+## Dépendances
+
+- Optionnelles : `PlaceholderAPI`, `SHNetwork`
+
 ## Commandes
 
 | Commande | Alias | Description | Permission |
 |---|---|---|---|
-| `/shnetworklevel` | — | Commande principale du plugin SHNetworkLevel. | — |
+| `/shnetworklevel exp <give\|take\|set> <joueur> <nombre>` | — | Modifie l'exp. Un `give` ou un `set` fait monter de niveau tant que l'exp atteint le seuil. | `shnetworklevel.admin` |
+| `/shnetworklevel level <give\|take\|set> <joueur> <nombre>` | — | Modifie le niveau sans toucher à l'exp. | `shnetworklevel.admin` |
+| `/shnetworklevel info <joueur>` | — | Niveau et exp du joueur. | `shnetworklevel.admin` |
+
+Placeholders : `%shnetworklevel_level%`, `%shnetworklevel_exp%`, `%shnetworklevel_expneeded%`, `%shnetworklevel_progressbar%`.
+
+À chaque niveau gagné, le joueur reçoit le message `messages.level-up`, entend le son de `sounds.levelup` et les commandes de `rewards` sont exécutées pour lui. Un joueur hors ligne n'en reçoit pas.
+
+## Plusieurs serveurs avec SHNetwork
+
+Les niveaux sont déjà dans une base commune à tous les serveurs (table `shnetworklevel`, une ligne par pseudo). Seul, le plugin garde les valeurs du joueur en cache et les réécrit en entier à chaque commande : c'est ce qui se passe sur le lobby et sur un serveur seul.
+
+Quand SHNetwork est installé (et `reseau.actif: true`), le plugin change de fonctionnement :
+
+- **Écritures sous verrou.** Chaque `exp` et `level` relit la ligne du joueur (`SELECT ... FOR UPDATE`), applique la modification puis l'écrit (`UPDATE`), dans une transaction. De l'exp donnée depuis deux serveurs en même temps s'additionne, et chaque niveau franchi l'est par une seule commande : sa récompense n'est donnée qu'une fois. La ligne d'un joueur inconnu est créée avec les valeurs par défaut, sans jamais écraser une ligne existante.
+- **Cache relu.** Après chaque écriture, le serveur prévient tous les autres (canal `reseau.canal`) : ceux où le joueur est connecté relisent sa ligne. Une lecture plus ancienne qui finit après une plus récente ne la remplace jamais. Tous les `reseau.relecture-secondes`, les joueurs connectés sont relus en une requête au cas où un message se perdrait. `/shnetworklevel info` lit toujours la base.
+- **Joueur sur un autre serveur.** La commande retrouve le joueur par la présence du réseau, même s'il n'a jamais joué sur ce serveur. S'il est connecté ailleurs, son serveur lui affiche le message de level-up et joue le son, et les commandes de `rewards` sont exécutées là où il est, une seule fois (`runFor`).
+- **Pas de barrière de passage.** Aucune donnée n'est gardée en attente : chaque commande est écrite en base avant de rendre la main, un joueur qui change de serveur retrouve donc ses valeurs.
+
+| Clé | Rôle |
+|---|---|
+| `reseau.actif` | `false` garde le fonctionnement d'un serveur seul même avec SHNetwork. |
+| `reseau.canal` | Canal du bus SHNetwork où les serveurs se préviennent d'une modification et d'un niveau gagné. |
+| `reseau.relecture-secondes` | Relecture en base des joueurs connectés. |
+
+La base est celle de la section `database` de `config.yml` (déjà utilisée sans SHNetwork) : aucune table nouvelle. Ces clés demandent un redémarrage. Sans SHNetwork, rien du mode réseau n'est chargé.
 
 ## Configuration
 
@@ -41,7 +70,7 @@ Java 25 et Maven :
 mvn clean package
 ```
 
-Le jar est généré dans `target/`.
+Le jar est généré dans `target/`. Les tests de calcul tournent sans serveur ; `LevelStoreTest` (écritures sous verrou) ne s'exécute qu'avec `SHNL_TEST_URL` (une base dont le nom contient `test`, ex. `jdbc:mariadb://127.0.0.1:3399/shnl_test`), `SHNL_TEST_USER` et `SHNL_TEST_PASSWORD`.
 
 ---
 

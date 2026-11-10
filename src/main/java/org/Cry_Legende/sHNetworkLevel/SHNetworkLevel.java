@@ -7,13 +7,20 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID; // Importation nécessaire pour getUniqueId
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
+import java.util.logging.Level;
 
+import org.Cry_Legende.sHNetworkLevel.network.NetBus;
+import org.Cry_Legende.sHNetworkLevel.network.ShNetworkBus;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.NamespacedKey;
@@ -40,6 +47,8 @@ public class SHNetworkLevel extends JavaPlugin {
     // Noms dont le chargement est en cours (PlaceholderAPI sur le thread principal)
     private final Set<String> loading = ConcurrentHashMap.newKeySet();
     private SHNetworkLevelPlaceholderExpansion expansion;
+    // Non nul seulement avec SHNetwork : écritures sous verrou, cache relu quand un autre serveur écrit, niveaux annoncés où est le joueur
+    private NetworkLevels net;
 
     @Override
     public void onEnable() {
@@ -97,10 +106,38 @@ public class SHNetworkLevel extends JavaPlugin {
             expansion.register();
             getLogger().info("Hook PlaceholderAPI enregistré.");
         }
+
+        enableNetwork();
+    }
+
+    /**
+     * Passe en mode réseau si SHNetwork est installé et 'reseau.actif' est vrai. Les classes qui touchent à SHNetwork
+     * ne sont résolues qu'ici : sans lui, rien n'est chargé et le plugin garde son fonctionnement d'origine.
+     */
+    private void enableNetwork() {
+        FileConfiguration config = getConfig();
+        if (!config.getBoolean("reseau.actif", true)) return;
+        if (!Bukkit.getPluginManager().isPluginEnabled("SHNetwork")) return;
+        NetworkLevels levels = null;
+        try {
+            NetBus bus = ShNetworkBus.open();
+            levels = new NetworkLevels(this, bus, new LevelStore(dataSource),
+                config.getString("reseau.canal", "networklevel"), config.getInt("reseau.relecture-secondes", 60));
+            net = levels;
+            levels.enable();
+            getLogger().info("SHNetwork détecté : modifications sous verrou, niveaux annoncés sur le serveur du joueur.");
+        } catch (RuntimeException | LinkageError e) {
+            net = null;
+            if (levels != null) levels.disable();
+            getLogger().log(Level.SEVERE, "SHNetwork présent mais inutilisable, fonctionnement local à ce serveur : " + e);
+        }
     }
 
     @Override
     public void onDisable() {
+        if (net != null) {
+            net.disable();
+        }
         // persist() garde l'expansion chez PlaceholderAPI : sans désinscription elle continuerait à interroger un pool fermé
         if (expansion != null) {
             expansion.unregister();
@@ -146,113 +183,7 @@ public class SHNetworkLevel extends JavaPlugin {
                     getConfig().getString("messages.invalid-number", "&cLe nombre fourni est invalide.")));
                 return true;
             }
-
-            Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
-                final OfflinePlayer target = Bukkit.getOfflinePlayer(targetNameInput);
-
-                // Vérifier si le joueur a un profil (a déjà joué ou est un joueur valide)
-                if (target == null || target.getUniqueId() == null || target.getName() == null) {
-                    Bukkit.getScheduler().runTask(this, () -> {
-                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                            getConfig().getString("messages.player-not-found", "&cLe joueur '%player%' n'a pas été trouvé ou n'a jamais joué.")
-                                .replace("%player%", targetNameInput)));
-                    });
-                    return;
-                }
-                final String playerName = target.getName(); // Nom canonique du joueur
-
-                final PlayerData data = getPlayerData(playerName);
-                final int oldLevel = data.level;
-
-                if (action.equals("give")) {
-                    data.exp += amount;
-                    while (data.exp >= getExpForNextLevel(data.level)) {
-                        data.exp -= getExpForNextLevel(data.level);
-                        data.level++;
-                    }
-                } else if (action.equals("take")) {
-                    data.exp = Math.max(data.exp - amount, 0);
-                    // Si l'exp tombe sous 0, il faudrait peut-être ajuster le level à la baisse.
-                    // Actuellement, le level ne baisse que si l'exp atteint 0 et qu'on continue de "take".
-                    // Ou alors, le level ne devrait jamais baisser avec "take exp".
-                } else if (action.equals("set")) {
-                    data.exp = Math.max(0, amount); // Assurer que l'exp n'est pas négative
-                    // La logique de recalcul du level en cas de "set exp" pourrait être revue.
-                    // Actuellement, elle ne fait qu'augmenter le level si l'exp est suffisante.
-                    // Si on set l'exp à 0, le level ne change pas.
-                    // Si vous voulez que le level soit recalculé de zéro en fonction de l'exp :
-                    // data.level = 0; // Réinitialiser le level
-                    // while (data.exp >= getExpForNextLevel(data.level)) {
-                    //    data.exp -= getExpForNextLevel(data.level);
-                    //    data.level++;
-                    // }
-                    // Pour l'instant, on garde la logique d'augmentation seule :
-                    while (data.exp >= getExpForNextLevel(data.level)) {
-                        data.exp -= getExpForNextLevel(data.level);
-                        data.level++;
-                    }
-                } else {
-                    Bukkit.getScheduler().runTask(this, () -> {
-                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                            getConfig().getString("messages.usage.exp", "&cUsage: /shnetworklevel exp <give/take/set> <player> <number>")));
-                    });
-                    return;
-                }
-
-                // Mise à jour de la base de données
-                try (Connection connection = dataSource.getConnection();
-                     PreparedStatement ps = connection.prepareStatement("REPLACE INTO shnetworklevel (name, level, exp) VALUES (?, ?, ?)")) {
-                    ps.setString(1, playerName);
-                    ps.setInt(2, data.level);
-                    ps.setInt(3, data.exp);
-                    ps.executeUpdate();
-                } catch (SQLException e) {
-                    getLogger().severe("Erreur lors de la mise à jour des données pour " + playerName + ": " + e.getMessage());
-                    e.printStackTrace();
-                    // Envoyer un message d'erreur à l'admin est une bonne idée ici aussi
-                    Bukkit.getScheduler().runTask(this, () -> {
-                        sender.sendMessage(ChatColor.RED + "Une erreur de base de données est survenue. Veuillez vérifier la console.");
-                    });
-                    return; // Stopper si la DB échoue
-                }
-
-                Bukkit.getScheduler().runTask(this, () -> {
-                    String msgKey = "";
-                    if (action.equals("give")) {
-                        msgKey = "messages.exp-given";
-                    } else if (action.equals("take")) {
-                        msgKey = "messages.exp-taken";
-                    } else if (action.equals("set")) {
-                        msgKey = "messages.exp-set";
-                    }
-                    String msgTemplate = getConfig().getString(msgKey, "&aCommande exécutée.");
-                    final String formattedMsg = msgTemplate.replace("%player%", targetNameInput) // Utiliser le nom tapé par l'admin
-                        .replace("%amount%", String.valueOf(amount));
-                    sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedMsg));
-
-                    if (data.level > oldLevel) {
-                        for (int lvl = oldLevel + 1; lvl <= data.level; lvl++) {
-                            String lvlMsgTemplate = getConfig().getString("messages.level-up", "&eFélicitations %player% ! Vous êtes passé au niveau %level% !");
-                            final String formattedLvlMsg = lvlMsgTemplate.replace("%player%", playerName) // Utiliser le nom canonique
-                                .replace("%level%", String.valueOf(lvl));
-
-                            if (!(sender instanceof Player) || !((Player) sender).getName().equals(playerName)) {
-                                sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedLvlMsg));
-                            }
-
-                            if (target.isOnline()) {
-                                Player onlinePlayer = target.getPlayer();
-                                if (onlinePlayer != null) {
-                                    onlinePlayer.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedLvlMsg));
-                                    playLevelUpSound(onlinePlayer);
-                                    executeRewardCommands(onlinePlayer, lvl);
-                                }
-                            }
-                        }
-                    }
-                    evictIfOffline(target, playerName);
-                });
-            });
+            changeAsync(sender, "exp", action, targetNameInput, amount);
             return true;
 
         } else if (sub.equals("level")) {
@@ -276,95 +207,7 @@ public class SHNetworkLevel extends JavaPlugin {
                     getConfig().getString("messages.invalid-number", "&cLe nombre fourni est invalide.")));
                 return true;
             }
-
-
-            Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
-                final OfflinePlayer target = Bukkit.getOfflinePlayer(targetNameInput);
-                if (target == null || target.getUniqueId() == null || target.getName() == null) {
-                    Bukkit.getScheduler().runTask(this, () -> {
-                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                            getConfig().getString("messages.player-not-found", "&cLe joueur '%player%' n'a pas été trouvé ou n'a jamais joué.")
-                                .replace("%player%", targetNameInput)));
-                    });
-                    return;
-                }
-                final String playerName = target.getName();
-
-                final PlayerData data = getPlayerData(playerName); // Expérience actuelle sera conservée
-                int oldLevel = data.level; // Pour la comparaison après modification
-
-                if (action.equals("give")) {
-                    data.level += amount;
-                } else if (action.equals("take")) {
-                    data.level = Math.max(0, data.level - amount); // Level ne peut pas être négatif
-                } else if (action.equals("set")) {
-                    data.level = Math.max(0, amount); // Level ne peut pas être négatif
-                } else {
-                    Bukkit.getScheduler().runTask(this, () -> {
-                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                            getConfig().getString("messages.usage.level", "&cUsage: /shnetworklevel level <give/take/set> <player> <number>")));
-                    });
-                    return;
-                }
-                // Note: changer le level ne change pas l'exp actuelle dans cette logique.
-                // Si le level est baissé, l'exp pourrait être supérieure à l'exp nécessaire pour le level actuel.
-                // Si le level est augmenté, l'exp reste la même (il faudra plus d'exp pour le prochain level up).
-                // Vous pourriez vouloir réinitialiser l'exp à 0 pour le nouveau level : data.exp = 0;
-
-                try (Connection connection = dataSource.getConnection();
-                     PreparedStatement ps = connection.prepareStatement("REPLACE INTO shnetworklevel (name, level, exp) VALUES (?, ?, ?)")) {
-                    ps.setString(1, playerName);
-                    ps.setInt(2, data.level);
-                    ps.setInt(3, data.exp); // Conserver l'exp actuelle
-                    ps.executeUpdate();
-                } catch (SQLException e) {
-                    getLogger().severe("Erreur lors de la mise à jour des données pour " + playerName + ": " + e.getMessage());
-                    e.printStackTrace();
-                    Bukkit.getScheduler().runTask(this, () -> {
-                        sender.sendMessage(ChatColor.RED + "Une erreur de base de données est survenue. Veuillez vérifier la console.");
-                    });
-                    return;
-                }
-
-                Bukkit.getScheduler().runTask(this, () -> {
-                    String msgKey = "";
-                    if (action.equals("give")) {
-                        msgKey = "messages.level-given";
-                    } else if (action.equals("take")) {
-                        msgKey = "messages.level-taken";
-                    } else if (action.equals("set")) {
-                        msgKey = "messages.level-set";
-                    }
-                    String msgTemplate = getConfig().getString(msgKey, "&aCommande exécutée.");
-                    final String formattedMsg = msgTemplate.replace("%player%", targetNameInput)
-                        .replace("%amount%", String.valueOf(amount));
-                    sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedMsg));
-
-                    // Si le level a augmenté et que le joueur est en ligne, notifier et donner des récompenses
-                    // Note: Si le level est "set" à une valeur plus élevée, cela déclenchera aussi.
-                    if (data.level > oldLevel) {
-                        for (int lvl = oldLevel + 1; lvl <= data.level; lvl++) {
-                            String lvlMsgTemplate = getConfig().getString("messages.level-up", "&eFélicitations %player% ! Vous êtes passé au niveau %level% !");
-                            final String formattedLvlMsg = lvlMsgTemplate.replace("%player%", playerName)
-                                .replace("%level%", String.valueOf(lvl));
-
-                            if (!(sender instanceof Player) || !((Player) sender).getName().equals(playerName)) {
-                                sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedLvlMsg));
-                            }
-
-                            if (target.isOnline()) {
-                                Player onlinePlayer = target.getPlayer();
-                                if (onlinePlayer != null) {
-                                    onlinePlayer.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedLvlMsg));
-                                    playLevelUpSound(onlinePlayer);
-                                    executeRewardCommands(onlinePlayer, lvl);
-                                }
-                            }
-                        }
-                    }
-                    evictIfOffline(target, playerName);
-                });
-            });
+            changeAsync(sender, "level", action, targetNameInput, amount);
             return true;
 
         } else if (sub.equals("info")) {
@@ -376,8 +219,8 @@ public class SHNetworkLevel extends JavaPlugin {
             final String targetNameInput = args[1];
 
             Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
-                final OfflinePlayer target = Bukkit.getOfflinePlayer(targetNameInput);
-                if (target == null || target.getUniqueId() == null || target.getName() == null) {
+                final Target target = resolveTarget(targetNameInput);
+                if (target == null) {
                     Bukkit.getScheduler().runTask(this, () -> {
                         sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
                             getConfig().getString("messages.player-not-found", "&cLe joueur '%player%' n'a pas été trouvé ou n'a jamais joué.")
@@ -385,9 +228,10 @@ public class SHNetworkLevel extends JavaPlugin {
                     });
                     return;
                 }
-                final String playerName = target.getName();
+                final String playerName = target.name();
 
-                PlayerData data = getPlayerData(playerName); // Cet appel est maintenant dans le thread async
+                // Avec SHNetwork, la base fait foi : le cache peut avoir un message de retard
+                PlayerData data = net != null ? net.fresh(playerName) : getPlayerData(playerName); // Cet appel est maintenant dans le thread async
                 String msgTemplate = getConfig().getString("messages.info", "&aInfos pour %player%: Niveau %level%, Exp %exp%/%expneeded%");
                 final int expNeeded = getExpForNextLevel(data.level);
 
@@ -399,7 +243,7 @@ public class SHNetworkLevel extends JavaPlugin {
 
                 Bukkit.getScheduler().runTask(this, () -> {
                     sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedMsg));
-                    evictIfOffline(target, playerName);
+                    if (net == null) evictIfOffline(target.offline(), playerName);
                 });
             });
             return true;
@@ -408,6 +252,149 @@ public class SHNetworkLevel extends JavaPlugin {
                 getConfig().getString("messages.usage.main", "&cUsage: /shnetworklevel <exp/level/info> ...")));
             return true;
         }
+    }
+
+    /** Joueur visé par une commande : son pseudo exact et, quand il est connu de ce serveur, son profil. */
+    private record Target(String name, OfflinePlayer offline) {
+    }
+
+    /**
+     * Retrouve le joueur visé. Avec SHNetwork, un joueur connecté sur un autre serveur est trouvé par la présence du
+     * réseau : ce serveur ne le connaît pas forcément. Sinon (et sur un serveur seul), comme avant : profil du serveur.
+     */
+    private Target resolveTarget(String input) {
+        if (net != null) {
+            Optional<String> online = net.canonicalName(input);
+            if (online.isPresent()) {
+                return new Target(online.get(), null);
+            }
+        }
+        final OfflinePlayer offline = Bukkit.getOfflinePlayer(input);
+        // Vérifier si le joueur a un profil (a déjà joué ou est un joueur valide)
+        if (offline == null || offline.getUniqueId() == null || offline.getName() == null) {
+            return null;
+        }
+        return new Target(offline.getName(), offline); // Nom canonique du joueur
+    }
+
+    /** Joueur visé s'il est connecté à ce serveur. */
+    private Player onlinePlayer(Target target) {
+        if (target.offline() != null && target.offline().isOnline()) {
+            Player online = target.offline().getPlayer();
+            if (online != null) {
+                return online;
+            }
+        }
+        return net != null ? Bukkit.getPlayerExact(target.name()) : null;
+    }
+
+    /**
+     * Commandes exp et level (give, take, set) : calcul, écriture en base, puis messages et récompenses.
+     * Sans SHNetwork, les valeurs du cache sont modifiées puis réécrites (REPLACE). Avec SHNetwork, la ligne est
+     * relue sous verrou et modifiée, pour que deux serveurs qui écrivent en même temps s'additionnent.
+     */
+    private void changeAsync(CommandSender sender, String kind, String action, String targetNameInput, int amount) {
+        final String usageKey = "messages.usage." + kind;
+        final String usageDefault = "&cUsage: /shnetworklevel " + kind + " <give/take/set> <player> <number>";
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+            final Target target = resolveTarget(targetNameInput);
+            if (target == null) {
+                Bukkit.getScheduler().runTask(this, () -> {
+                    sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
+                        getConfig().getString("messages.player-not-found", "&cLe joueur '%player%' n'a pas été trouvé ou n'a jamais joué.")
+                            .replace("%player%", targetNameInput)));
+                });
+                return;
+            }
+            final String playerName = target.name();
+            final Predicate<PlayerData> change = data -> kind.equals("exp")
+                ? LevelRules.applyExp(data, action, amount, this::getExpForNextLevel)
+                : LevelRules.applyLevel(data, action, amount);
+
+            final int oldLevel;
+            final int newLevel;
+            if (net != null) {
+                if (!LevelRules.validAction(action)) {
+                    Bukkit.getScheduler().runTask(this, () -> {
+                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', getConfig().getString(usageKey, usageDefault)));
+                    });
+                    return;
+                }
+                final LevelStore.Change done;
+                try {
+                    done = net.update(playerName, change);
+                } catch (SQLException e) {
+                    databaseError(sender, playerName, e);
+                    return;
+                }
+                oldLevel = done.oldLevel();
+                newLevel = done.level();
+            } else {
+                final PlayerData data = getPlayerData(playerName); // Expérience actuelle conservée par la commande level
+                oldLevel = data.level; // Pour la comparaison après modification
+                if (!change.test(data)) {
+                    Bukkit.getScheduler().runTask(this, () -> {
+                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', getConfig().getString(usageKey, usageDefault)));
+                    });
+                    return;
+                }
+
+                // Mise à jour de la base de données
+                try (Connection connection = dataSource.getConnection();
+                     PreparedStatement ps = connection.prepareStatement("REPLACE INTO shnetworklevel (name, level, exp) VALUES (?, ?, ?)")) {
+                    ps.setString(1, playerName);
+                    ps.setInt(2, data.level);
+                    ps.setInt(3, data.exp);
+                    ps.executeUpdate();
+                } catch (SQLException e) {
+                    databaseError(sender, playerName, e);
+                    return; // Stopper si la DB échoue
+                }
+                newLevel = data.level;
+            }
+
+            Bukkit.getScheduler().runTask(this, () -> {
+                String msgKey = "messages." + kind + "-" + (action.equals("give") ? "given" : action.equals("take") ? "taken" : "set");
+                String msgTemplate = getConfig().getString(msgKey, "&aCommande exécutée.");
+                final String formattedMsg = msgTemplate.replace("%player%", targetNameInput) // Utiliser le nom tapé par l'admin
+                    .replace("%amount%", String.valueOf(amount));
+                sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedMsg));
+
+                // Si le level a augmenté (give, ou set d'exp/de niveau plus élevé) : notifier et récompenser le joueur
+                if (newLevel > oldLevel) {
+                    final Player online = onlinePlayer(target);
+                    final boolean elsewhere = online == null && net != null && net.onlineElsewhere(playerName);
+                    for (int lvl = oldLevel + 1; lvl <= newLevel; lvl++) {
+                        String lvlMsgTemplate = getConfig().getString("messages.level-up", "&eFélicitations %player% ! Vous êtes passé au niveau %level% !");
+                        final String formattedLvlMsg = lvlMsgTemplate.replace("%player%", playerName) // Utiliser le nom canonique
+                            .replace("%level%", String.valueOf(lvl));
+
+                        if (!(sender instanceof Player) || !((Player) sender).getName().equals(playerName)) {
+                            sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedLvlMsg));
+                        }
+
+                        if (online != null) {
+                            online.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedLvlMsg));
+                            playLevelUpSound(online);
+                            executeRewardCommands(online, lvl);
+                        } else if (elsewhere) {
+                            // Connecté sur un autre serveur : il y reçoit le message, le son et la récompense (une seule fois)
+                            net.levelUpElsewhere(playerName, lvl, rewardCommands(playerName, lvl));
+                        }
+                    }
+                }
+                if (net == null) evictIfOffline(target.offline(), playerName);
+            });
+        });
+    }
+
+    private void databaseError(CommandSender sender, String playerName, SQLException e) {
+        getLogger().severe("Erreur lors de la mise à jour des données pour " + playerName + ": " + e.getMessage());
+        e.printStackTrace();
+        // Envoyer un message d'erreur à l'admin est une bonne idée ici aussi
+        Bukkit.getScheduler().runTask(this, () -> {
+            sender.sendMessage(ChatColor.RED + "Une erreur de base de données est survenue. Veuillez vérifier la console.");
+        });
     }
 
     /**
@@ -466,40 +453,56 @@ public class SHNetworkLevel extends JavaPlugin {
      * Exécute les commandes de récompense définies pour un level-up.
      */
     private void executeRewardCommands(Player player, int newLevel) {
+        for (String cmd : rewardCommands(player.getName(), newLevel)) {
+            Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
+        }
+    }
+
+    /**
+     * Commandes de récompense d'un level-up, avec le pseudo et le niveau remplacés.
+     */
+    List<String> rewardCommands(String playerName, int newLevel) {
         FileConfiguration config = getConfig();
+        List<String> source = List.of();
         // Vérifier si la section existe et est une liste
         if (!config.isConfigurationSection("rewards." + newLevel) && !config.isList("rewards.levelup-commands")) {
             // Tenter de lire une liste globale si pas de section spécifique au niveau
             if (config.isList("rewards.default-levelup-commands")) { // Nom suggéré pour commandes globales
-                for (String command : config.getStringList("rewards.default-levelup-commands")) {
-                    String cmd = command.replace("%player%", player.getName())
-                        .replace("%level%", String.valueOf(newLevel));
-                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
-                }
+                source = config.getStringList("rewards.default-levelup-commands");
             }
-            return;
-        }
-
-        // Logique pour les récompenses par niveau spécifique
-        if (config.isConfigurationSection("rewards." + newLevel)) {
+        } else if (config.isConfigurationSection("rewards." + newLevel)) {
+            // Logique pour les récompenses par niveau spécifique
             if (config.isList("rewards." + newLevel + ".commands")) {
-                for (String command : config.getStringList("rewards." + newLevel + ".commands")) {
-                    String cmd = command.replace("%player%", player.getName())
-                        .replace("%level%", String.valueOf(newLevel));
-                    Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
-                }
+                source = config.getStringList("rewards." + newLevel + ".commands");
             }
+        } else if (config.isList("rewards.levelup-commands")) { // Liste globale
+            source = config.getStringList("rewards.levelup-commands");
         }
-        // Logique pour la liste globale "rewards.levelup-commands" (votre existante)
-        // Peut être combinée avec la logique par niveau ou être exclusive.
-        // Ici, on les exécute toutes les deux si présentes.
-        else if (config.isList("rewards.levelup-commands")) { // Votre ancienne clé
-            for (String command : config.getStringList("rewards.levelup-commands")) {
-                String cmd = command.replace("%player%", player.getName())
-                    .replace("%level%", String.valueOf(newLevel));
-                Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd);
-            }
+        List<String> commands = new ArrayList<>();
+        for (String command : source) {
+            commands.add(command.replace("%player%", playerName).replace("%level%", String.valueOf(newLevel)));
         }
+        return commands;
+    }
+
+    /**
+     * Message et son de level-up d'un joueur de ce serveur.
+     */
+    void announceLevelUp(Player player, int level) {
+        String template = getConfig().getString("messages.level-up", "&eFélicitations %player% ! Vous êtes passé au niveau %level% !");
+        player.sendMessage(ChatColor.translateAlternateColorCodes('&',
+            template.replace("%player%", player.getName()).replace("%level%", String.valueOf(level))));
+        playLevelUpSound(player);
+    }
+
+    /** Cache des joueurs (clé : pseudo). */
+    ConcurrentHashMap<String, PlayerData> cache() {
+        return playerCache;
+    }
+
+    /** Valeurs d'un joueur sans ligne en base. */
+    PlayerData defaults() {
+        return new PlayerData(getConfig().getInt("default-values.level", 0), getConfig().getInt("default-values.exp", 0));
     }
 
     /**
@@ -507,12 +510,15 @@ public class SHNetworkLevel extends JavaPlugin {
      * Cette méthode peut effectuer des opérations de base de données et doit être appelée de manière asynchrone
      * si elle est appelée depuis le thread principal et que le joueur n'est pas en cache.
      */
-    public PlayerData getPlayerData(String playerName) { // Rendre 'public' pour PlaceholderAPI si besoin, sinon 'private'
+    PlayerData getPlayerData(String playerName) {
         PlayerData cached = playerCache.get(playerName);
         if (cached != null) {
             return cached;
         }
-        PlayerData data = new PlayerData();
+        if (net != null) {
+            return net.cachedOrLoad(playerName);
+        }
+        PlayerData data = defaults();
         try (Connection connection = dataSource.getConnection();
              PreparedStatement ps = connection.prepareStatement("SELECT level, exp FROM shnetworklevel WHERE name = ?")) {
             ps.setString(1, playerName);
@@ -556,6 +562,7 @@ public class SHNetworkLevel extends JavaPlugin {
         if (cached != null) {
             return cached;
         }
+        // Vrai aussi sur les fils de monde quand les mondes tournent en parallèle : aucun SQL sur un fil de tick
         if (!Bukkit.isPrimaryThread()) {
             return getPlayerData(playerName);
         }
@@ -568,7 +575,7 @@ public class SHNetworkLevel extends JavaPlugin {
                 }
             });
         }
-        return new PlayerData();
+        return defaults();
     }
 
     /**
@@ -578,20 +585,6 @@ public class SHNetworkLevel extends JavaPlugin {
     private void evictIfOffline(OfflinePlayer target, String playerName) {
         if (!target.isOnline()) {
             playerCache.remove(playerName);
-        }
-    }
-
-    /**
-     * Classe interne pour stocker les données d'un joueur.
-     */
-    private class PlayerData {
-        public int level;
-        public int exp;
-
-        // Constructeur par défaut pour initialiser
-        public PlayerData() {
-            this.level = getConfig().getInt("default-values.level", 0);
-            this.exp = getConfig().getInt("default-values.exp", 0);
         }
     }
 

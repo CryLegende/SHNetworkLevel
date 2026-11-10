@@ -3,7 +3,8 @@ version: '${project.version}'
 main: org.Cry_Legende.sHNetworkLevel.SHNetworkLevel
 api-version: '1.20'
 author: Cry_Legende
-softdepend: [PlaceholderAPI]
+# SHNetwork est facultatif : sans lui, le plugin garde son fonctionnement local (lobby, login, serveur seul).
+softdepend: [PlaceholderAPI, SHNetwork]
 # Charges par Paper dans le classloader du plugin : HikariCP doit voir le driver MariaDB,
 # que le serveur ne fournit pas (il n'embarque que MySQL et SQLite).
 libraries:

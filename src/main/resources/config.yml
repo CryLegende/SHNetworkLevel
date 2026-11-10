@@ -1,7 +1,27 @@
-# %shnetworklevel_exp% La quantité d'exp du joueur
-# %shnetworklevel_level% Le niveau du joueur
-# %shnetworklevel_expneeded% Le total d’exp nécessaire pour passer au niveau suivant
-# %shnetworklevel_progressbar% Une barre de progression visuelle basée sur la quantité d’exp actuelle par rapport au seuil requis
+# ======================================================================== #
+#                   SHNetworkLevel - Configuration                         #
+# ======================================================================== #
+#
+# Plugin : niveau de network des joueurs (niveau et exp), partagé entre les serveurs dans la table
+# shnetworklevel de MariaDB (une ligne par pseudo), avec récompenses de level-up, son, barre de
+# progression et placeholders.
+#
+# Commandes (permission shnetworklevel.admin) :
+#   /shnetworklevel exp <give|take|set> <joueur> <nombre>     Modifie l'exp. Un give ou un set fait monter de niveau
+#                                                             tant que l'exp atteint le seuil.
+#   /shnetworklevel level <give|take|set> <joueur> <nombre>   Modifie le niveau sans toucher à l'exp.
+#   /shnetworklevel info <joueur>                             Niveau et exp du joueur.
+#
+# Placeholders :
+#   %shnetworklevel_exp%          La quantité d'exp du joueur
+#   %shnetworklevel_level%        Le niveau du joueur
+#   %shnetworklevel_expneeded%    Le total d'exp nécessaire pour passer au niveau suivant
+#   %shnetworklevel_progressbar%  Une barre de progression visuelle basée sur la quantité d'exp actuelle par rapport au seuil requis
+#
+# Les textes des messages sont dans la section 'messages' de ce fichier.
+# Demande un redémarrage : database, reseau.
+#
+# ======================================================================== #
 
 # Paramètres de connexion à MariaDB
 database:
@@ -55,3 +75,16 @@ Progress-bar:
   Character: "■"
   Complete: "&5"
   Remaining: "&7"
+
+# Plusieurs serveurs Opale avec SHNetwork. Sans SHNetwork, ou avec 'actif: false', le plugin fonctionne comme sur
+# un serveur seul : les valeurs du joueur sont gardées en cache et réécrites en entier à chaque commande.
+# Avec SHNetwork, la ligne du joueur est relue sous verrou avant chaque modification : l'exp donnée depuis deux
+# serveurs en même temps s'additionne. Le cache des joueurs connectés est relu quand un autre serveur écrit.
+# Un niveau gagné par un joueur qui se trouve sur un autre serveur lui est annoncé là-bas et ses commandes de
+# récompense y sont exécutées, une seule fois. La base est celle de la section 'database'.
+reseau:
+  actif: true
+  # Canal du bus SHNetwork où les serveurs se préviennent d'une modification et d'un niveau gagné
+  canal: networklevel
+  # Relecture en base des joueurs connectés, en secondes, au cas où un message du bus se perdrait
+  relecture-secondes: 60
