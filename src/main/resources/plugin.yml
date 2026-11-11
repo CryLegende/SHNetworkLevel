@@ -13,5 +13,27 @@ libraries:
 
 commands:
   shnetworklevel:
-    description: Commande principale du plugin SHNetworkLevel.
-    usage: /<command> <exp/level/info> ...
+    description: Administration du niveau de network (exp, niveau, consultation, rechargement).
+    usage: /<command> <exp|level|info|reload> ...
+
+permissions:
+  shnetworklevel.admin:
+    description: Toutes les sous-commandes de /shnetworklevel.
+    default: op
+    children:
+      shnetworklevel.admin.exp: true
+      shnetworklevel.admin.level: true
+      shnetworklevel.admin.info: true
+      shnetworklevel.admin.reload: true
+  shnetworklevel.admin.exp:
+    description: Donner, retirer ou définir l'exp d'un joueur (/shnetworklevel exp).
+    default: op
+  shnetworklevel.admin.level:
+    description: Donner, retirer ou définir le niveau d'un joueur (/shnetworklevel level).
+    default: op
+  shnetworklevel.admin.info:
+    description: Voir le niveau et l'exp d'un joueur (/shnetworklevel info).
+    default: op
+  shnetworklevel.admin.reload:
+    description: Recharger config.yml et messages.yml (/shnetworklevel reload).
+    default: op

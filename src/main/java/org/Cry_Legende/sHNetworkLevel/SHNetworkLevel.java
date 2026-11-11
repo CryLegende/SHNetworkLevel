@@ -3,6 +3,11 @@ package org.Cry_Legende.sHNetworkLevel;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 
+import java.io.File;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -35,6 +40,9 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.InvalidConfigurationException;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.configuration.file.FileConfiguration;
 import me.clip.placeholderapi.expansion.PlaceholderExpansion;
@@ -49,11 +57,16 @@ public class SHNetworkLevel extends JavaPlugin {
     private SHNetworkLevelPlaceholderExpansion expansion;
     // Non nul seulement avec SHNetwork : écritures sous verrou, cache relu quand un autre serveur écrit, niveaux annoncés où est le joueur
     private NetworkLevels net;
+    // Textes de messages.yml, remplacés d'un bloc à chaque chargement
+    private volatile YamlConfiguration messages = new YamlConfiguration();
+
+    private static final String MESSAGES_FILE = "messages.yml";
 
     @Override
     public void onEnable() {
         // Sauvegarde de la config par défaut si elle n'existe pas
         saveDefaultConfig();
+        loadMessages();
         FileConfiguration config = getConfig();
 
         // Récupération des paramètres de connexion à la base de données depuis la config
@@ -149,28 +162,40 @@ public class SHNetworkLevel extends JavaPlugin {
         }
     }
 
-    // Traitement de la commande /shnetworklevel
+    private static final List<String> SUBCOMMANDS = List.of("exp", "level", "info", "reload");
+    private static final String PERMISSION_PREFIX = "shnetworklevel.admin.";
+
+    private static boolean can(CommandSender sender, String subCommand) {
+        return sender.hasPermission(PERMISSION_PREFIX + subCommand);
+    }
+
+    private void send(CommandSender sender, String text) {
+        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', text));
+    }
+
+    // Traitement de la commande /shnetworklevel : exp, level, info et reload, chacune avec sa permission
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-
-        if (args.length == 0) {
-            sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                getConfig().getString("messages.usage.main", "&cUsage: /shnetworklevel <exp/level/info> ...")));
+        String sub = args.length > 0 ? args[0].toLowerCase(Locale.ROOT) : "";
+        if (!SUBCOMMANDS.contains(sub)) {
+            sendUsage(sender);
+            return true;
+        }
+        if (!can(sender, sub)) {
+            send(sender, msg("no-permission", "&cVous n'avez pas la permission d'exécuter cette commande."));
             return true;
         }
 
-        if (!sender.hasPermission("shnetworklevel.admin")) {
-            sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                getConfig().getString("messages.no-permission", "&cVous n'avez pas la permission d'exécuter cette commande.")));
+        if (sub.equals("reload")) {
+            if (reloadFiles(sender)) {
+                send(sender, msg("reload-done", "&7&l« &a&lSH &8&l» &7Configuration &arechargée&7."));
+            }
             return true;
         }
-
-        String sub = args[0].toLowerCase();
 
         if (sub.equals("exp")) {
             if (args.length != 4) {
-                sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                    getConfig().getString("messages.usage.exp", "&cUsage: /shnetworklevel exp <give/take/set> <player> <number>")));
+                send(sender, msg("usage.exp", "&cUsage: /shnetworklevel exp <give/take/set> <player> <number>"));
                 return true;
             }
             final String action = args[1].toLowerCase();
@@ -179,8 +204,7 @@ public class SHNetworkLevel extends JavaPlugin {
             try {
                 amount = Integer.parseInt(args[3]);
             } catch (NumberFormatException e) {
-                sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                    getConfig().getString("messages.invalid-number", "&cLe nombre fourni est invalide.")));
+                send(sender, msg("invalid-number", "&cLe nombre fourni est invalide."));
                 return true;
             }
             changeAsync(sender, "exp", action, targetNameInput, amount);
@@ -188,8 +212,7 @@ public class SHNetworkLevel extends JavaPlugin {
 
         } else if (sub.equals("level")) {
             if (args.length != 4) {
-                sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                    getConfig().getString("messages.usage.level", "&cUsage: /shnetworklevel level <give/take/set> <player> <number>")));
+                send(sender, msg("usage.level", "&cUsage: /shnetworklevel level <give/take/set> <player> <number>"));
                 return true;
             }
             final String action = args[1].toLowerCase();
@@ -198,22 +221,19 @@ public class SHNetworkLevel extends JavaPlugin {
             try {
                 amount = Integer.parseInt(args[3]);
                 if (amount < 0) {
-                    sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                        getConfig().getString("messages.invalid-number-positive", "&cLe niveau doit être un nombre positif ou nul.")));
+                    send(sender, msg("invalid-number-positive", "&cLe niveau doit être un nombre positif ou nul."));
                     return true;
                 }
             } catch (NumberFormatException e) {
-                sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                    getConfig().getString("messages.invalid-number", "&cLe nombre fourni est invalide.")));
+                send(sender, msg("invalid-number", "&cLe nombre fourni est invalide."));
                 return true;
             }
             changeAsync(sender, "level", action, targetNameInput, amount);
             return true;
 
-        } else if (sub.equals("info")) {
+        } else {
             if (args.length != 2) {
-                sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                    getConfig().getString("messages.usage.info", "&cUsage: /shnetworklevel info <player>")));
+                send(sender, msg("usage.info", "&cUsage: /shnetworklevel info <player>"));
                 return true;
             }
             final String targetNameInput = args[1];
@@ -222,9 +242,8 @@ public class SHNetworkLevel extends JavaPlugin {
                 final Target target = resolveTarget(targetNameInput);
                 if (target == null) {
                     Bukkit.getScheduler().runTask(this, () -> {
-                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                            getConfig().getString("messages.player-not-found", "&cLe joueur '%player%' n'a pas été trouvé ou n'a jamais joué.")
-                                .replace("%player%", targetNameInput)));
+                        send(sender, msg("player-not-found", "&cLe joueur '%player%' n'a pas été trouvé ou n'a jamais joué.")
+                            .replace("%player%", targetNameInput));
                     });
                     return;
                 }
@@ -232,7 +251,7 @@ public class SHNetworkLevel extends JavaPlugin {
 
                 // Avec SHNetwork, la base fait foi : le cache peut avoir un message de retard
                 PlayerData data = net != null ? net.fresh(playerName) : getPlayerData(playerName); // Cet appel est maintenant dans le thread async
-                String msgTemplate = getConfig().getString("messages.info", "&aInfos pour %player%: Niveau %level%, Exp %exp%/%expneeded%");
+                String msgTemplate = msg("info", "&aInfos pour %player%: Niveau %level%, Exp %exp%/%expneeded%");
                 final int expNeeded = getExpForNextLevel(data.level);
 
                 final String formattedMsg = msgTemplate.replace("%player%", playerName) // Utiliser le nom canonique pour l'info
@@ -242,15 +261,140 @@ public class SHNetworkLevel extends JavaPlugin {
                     .replace("%progressbar%", buildProgressBar(data.exp, expNeeded)); // Ajout de la progress bar
 
                 Bukkit.getScheduler().runTask(this, () -> {
-                    sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedMsg));
+                    send(sender, formattedMsg);
                     if (net == null) evictIfOffline(target.offline(), playerName);
                 });
             });
             return true;
+        }
+    }
+
+    /** Une seule ligne d'usage, limitée aux sous-commandes que l'expéditeur peut utiliser. */
+    private void sendUsage(CommandSender sender) {
+        List<String> allowed = new ArrayList<>();
+        for (String sub : SUBCOMMANDS) {
+            if (can(sender, sub)) {
+                allowed.add(sub);
+            }
+        }
+        if (allowed.isEmpty()) {
+            send(sender, msg("no-permission", "&cVous n'avez pas la permission d'exécuter cette commande."));
+            return;
+        }
+        send(sender, msg("usage.list", "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel <%subcommands%>")
+            .replace("%subcommands%", String.join("/", allowed)));
+    }
+
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        List<String> completions = new ArrayList<>();
+        if (args.length == 1) {
+            for (String sub : SUBCOMMANDS) {
+                if (can(sender, sub)) {
+                    completions.add(sub);
+                }
+            }
         } else {
-            sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                getConfig().getString("messages.usage.main", "&cUsage: /shnetworklevel <exp/level/info> ...")));
-            return true;
+            String sub = args[0].toLowerCase(Locale.ROOT);
+            if (SUBCOMMANDS.contains(sub) && can(sender, sub)) {
+                boolean change = sub.equals("exp") || sub.equals("level");
+                if (change && args.length == 2) {
+                    completions.addAll(List.of("give", "take", "set"));
+                } else if ((change && args.length == 3) || (sub.equals("info") && args.length == 2)) {
+                    Bukkit.getOnlinePlayers().forEach(player -> completions.add(player.getName()));
+                }
+            }
+        }
+        String typed = args[args.length - 1].toLowerCase(Locale.ROOT);
+        completions.removeIf(name -> !name.toLowerCase(Locale.ROOT).startsWith(typed));
+        return completions;
+    }
+
+    /** Texte de messages.yml (chemin sans préfixe), ou le texte donné si la clé manque partout. */
+    private String msg(String path, String fallback) {
+        String value = messages.getString(path);
+        return value != null ? value : fallback;
+    }
+
+    private void loadMessages() {
+        File file = new File(getDataFolder(), MESSAGES_FILE);
+        if (!file.exists()) {
+            saveResource(MESSAGES_FILE, false);
+            migrateMessagesFromConfig(file);
+        }
+        applyMessages(YamlConfiguration.loadConfiguration(file));
+    }
+
+    /**
+     * Premier démarrage après la mise à jour : messages.yml est créé à partir du jar, puis les textes de l'ancienne
+     * section messages: de config.yml (ceux du serveur) y sont reportés. Cette section n'est plus lue ensuite.
+     */
+    private void migrateMessagesFromConfig(File target) {
+        File configFile = new File(getDataFolder(), "config.yml");
+        if (!configFile.isFile()) {
+            return;
+        }
+        ConfigurationSection old = YamlConfiguration.loadConfiguration(configFile).getConfigurationSection("messages");
+        if (old == null) {
+            return;
+        }
+        YamlConfiguration created = YamlConfiguration.loadConfiguration(target);
+        int moved = 0;
+        for (String key : old.getKeys(true)) {
+            if (!old.isConfigurationSection(key) && created.contains(key) && !created.isConfigurationSection(key)) {
+                created.set(key, old.get(key));
+                moved++;
+            }
+        }
+        try {
+            created.save(target);
+            getLogger().info("messages.yml créé : " + moved + " texte(s) repris de la section messages de config.yml.");
+        } catch (IOException e) {
+            getLogger().warning("messages.yml créé sans les textes de config.yml : " + e.getMessage());
+        }
+    }
+
+    /** Remplace les messages ; les clés absentes du fichier du serveur reprennent le texte du jar. */
+    private void applyMessages(YamlConfiguration loaded) {
+        try (Reader defaults = new InputStreamReader(getResource(MESSAGES_FILE), StandardCharsets.UTF_8)) {
+            loaded.setDefaults(YamlConfiguration.loadConfiguration(defaults));
+        } catch (IOException | RuntimeException e) {
+            getLogger().warning("messages.yml du jar illisible : " + e.getMessage());
+        }
+        messages = loaded;
+    }
+
+    /**
+     * Relit config.yml et messages.yml. Si l'un des deux est invalide, rien n'est appliqué : l'ancienne configuration
+     * reste en place et l'expéditeur reçoit le fichier et l'erreur. Ne touche ni au cache des joueurs ni à la base ;
+     * database.* et reseau.* demandent un redémarrage.
+     *
+     * @return vrai si tout a été rechargé
+     */
+    private boolean reloadFiles(CommandSender sender) {
+        YamlConfiguration newMessages = parse(sender, MESSAGES_FILE);
+        if (newMessages == null || parse(sender, "config.yml") == null) {
+            return false;
+        }
+        reloadConfig();
+        applyMessages(newMessages);
+        return true;
+    }
+
+    private YamlConfiguration parse(CommandSender sender, String name) {
+        YamlConfiguration yaml = new YamlConfiguration();
+        try {
+            yaml.load(new File(getDataFolder(), name));
+            return yaml;
+        } catch (IOException | InvalidConfigurationException e) {
+            getLogger().severe("Rechargement annulé, " + name + " est invalide : " + e.getMessage());
+            String text = String.valueOf(e.getMessage()).strip();
+            int end = text.indexOf('\n');
+            String error = end < 0 ? text : text.substring(0, end).strip();
+            send(sender, msg("reload-failed", "&cRechargement annulé : %file% est invalide (%error%).")
+                .replace("%file%", name)
+                .replace("%error%", error.length() > 160 ? error.substring(0, 160) + "..." : error));
+            return null;
         }
     }
 
@@ -294,14 +438,14 @@ public class SHNetworkLevel extends JavaPlugin {
      * relue sous verrou et modifiée, pour que deux serveurs qui écrivent en même temps s'additionnent.
      */
     private void changeAsync(CommandSender sender, String kind, String action, String targetNameInput, int amount) {
-        final String usageKey = "messages.usage." + kind;
+        final String usageKey = "usage." + kind;
         final String usageDefault = "&cUsage: /shnetworklevel " + kind + " <give/take/set> <player> <number>";
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
             final Target target = resolveTarget(targetNameInput);
             if (target == null) {
                 Bukkit.getScheduler().runTask(this, () -> {
                     sender.sendMessage(ChatColor.translateAlternateColorCodes('&',
-                        getConfig().getString("messages.player-not-found", "&cLe joueur '%player%' n'a pas été trouvé ou n'a jamais joué.")
+                        msg("player-not-found", "&cLe joueur '%player%' n'a pas été trouvé ou n'a jamais joué.")
                             .replace("%player%", targetNameInput)));
                 });
                 return;
@@ -316,7 +460,7 @@ public class SHNetworkLevel extends JavaPlugin {
             if (net != null) {
                 if (!LevelRules.validAction(action)) {
                     Bukkit.getScheduler().runTask(this, () -> {
-                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', getConfig().getString(usageKey, usageDefault)));
+                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', msg(usageKey, usageDefault)));
                     });
                     return;
                 }
@@ -329,7 +473,7 @@ public class SHNetworkLevel extends JavaPlugin {
                 }
                 if (done == null) {
                     Bukkit.getScheduler().runTask(this, () -> {
-                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', getConfig().getString(usageKey, usageDefault)));
+                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', msg(usageKey, usageDefault)));
                     });
                     return;
                 }
@@ -340,7 +484,7 @@ public class SHNetworkLevel extends JavaPlugin {
                 oldLevel = data.level; // Pour la comparaison après modification
                 if (!change.test(data)) {
                     Bukkit.getScheduler().runTask(this, () -> {
-                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', getConfig().getString(usageKey, usageDefault)));
+                        sender.sendMessage(ChatColor.translateAlternateColorCodes('&', msg(usageKey, usageDefault)));
                     });
                     return;
                 }
@@ -360,8 +504,8 @@ public class SHNetworkLevel extends JavaPlugin {
             }
 
             Bukkit.getScheduler().runTask(this, () -> {
-                String msgKey = "messages." + kind + "-" + (action.equals("give") ? "given" : action.equals("take") ? "taken" : "set");
-                String msgTemplate = getConfig().getString(msgKey, "&aCommande exécutée.");
+                String msgKey = kind + "-" + (action.equals("give") ? "given" : action.equals("take") ? "taken" : "set");
+                String msgTemplate = msg(msgKey, "&aCommande exécutée.");
                 final String formattedMsg = msgTemplate.replace("%player%", targetNameInput) // Utiliser le nom tapé par l'admin
                     .replace("%amount%", String.valueOf(amount));
                 sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedMsg));
@@ -371,7 +515,7 @@ public class SHNetworkLevel extends JavaPlugin {
                     final Player online = onlinePlayer(target);
                     final boolean elsewhere = online == null && net != null && net.onlineElsewhere(playerName);
                     for (int lvl = oldLevel + 1; lvl <= newLevel; lvl++) {
-                        String lvlMsgTemplate = getConfig().getString("messages.level-up", "&eFélicitations %player% ! Vous êtes passé au niveau %level% !");
+                        String lvlMsgTemplate = msg("level-up", "&eFélicitations %player% ! Vous êtes passé au niveau %level% !");
                         final String formattedLvlMsg = lvlMsgTemplate.replace("%player%", playerName) // Utiliser le nom canonique
                             .replace("%level%", String.valueOf(lvl));
 
@@ -495,7 +639,7 @@ public class SHNetworkLevel extends JavaPlugin {
      * Message et son de level-up d'un joueur de ce serveur.
      */
     void announceLevelUp(Player player, int level) {
-        String template = getConfig().getString("messages.level-up", "&eFélicitations %player% ! Vous êtes passé au niveau %level% !");
+        String template = msg("level-up", "&eFélicitations %player% ! Vous êtes passé au niveau %level% !");
         player.sendMessage(ChatColor.translateAlternateColorCodes('&',
             template.replace("%player%", player.getName()).replace("%level%", String.valueOf(level))));
         playLevelUpSound(player);

@@ -1,0 +1,23 @@
+# Messages de SHNetworkLevel. Codes couleur avec '&'.
+# Variables : %player%, %amount%, %level%, %exp%, %expneeded%, %progressbar% selon le message,
+# %subcommands% (usage.list : sous-commandes autorisées), %file% et %error% (reload-failed).
+
+no-permission: "&8&l« &f&lSH &8&l» &fCommande inconnue, essayer autre chose."
+invalid-number: "&cLe nombre fourni est invalide."
+invalid-number-positive: "&cLe niveau doit être un nombre positif ou nul."
+player-not-found: "&cLe joueur '%player%' n'a pas été trouvé ou n'a jamais joué."
+usage:
+  list: "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel <%subcommands%>"
+  exp: "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel exp <give/take/set> <player> <number>"
+  level: "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel level <give/take/set> <player> <number>"
+  info: "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel info <player>"
+exp-given: "&7&l« &a&lSH &8&l» &7Vous avez donné &a%amount% exp de network &7à &a%player%"
+exp-taken: "&7&l« &6&lSH &8&l» &7Vous avez retiré &6%amount% exp &7à &6%player%"
+exp-set: "&7&l« &6&lSH &8&l» &7L'exp de &6%player% &7a été définie à &6%amount%"
+level-given: "&7&l« &a&lSH &8&l» &7Vous avez donné &a%amount% niveaux &7à &a%player%"
+level-taken: "&7&l« &6&lSH &8&l» &7Vous avez retiré &6%amount% niveaux &7à &6%player%"
+level-set: "&7&l« &6&lSH &8&l» &7Le niveau de &6%player% &7est défini à &6%amount%"
+level-up: "&7&l« &5&lSH &8&l» &fFélicitations &5%player% &f! Vous avez gagné un &5niveau de network&f ! &7(/network)"
+info: "&7&l« &e&lSH &8&l» &e%player% &7est niveau &e%level% &7avec &e%exp% exp"
+reload-done: "&7&l« &a&lSH &8&l» &7Configuration &arechargée&7."
+reload-failed: "&7&l« &c&lSH &8&l» &7Rechargement &cannulé&7 : &c%file% &7est invalide (&c%error%&7). L'ancienne configuration reste active."

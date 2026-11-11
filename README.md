@@ -26,13 +26,26 @@ Utilisé sur : **Opale · Lobby**.
 
 | Commande | Alias | Description | Permission |
 |---|---|---|---|
-| `/shnetworklevel exp <give\|take\|set> <joueur> <nombre>` | — | Modifie l'exp. Un `give` ou un `set` fait monter de niveau tant que l'exp atteint le seuil. | `shnetworklevel.admin` |
-| `/shnetworklevel level <give\|take\|set> <joueur> <nombre>` | — | Modifie le niveau sans toucher à l'exp. | `shnetworklevel.admin` |
-| `/shnetworklevel info <joueur>` | — | Niveau et exp du joueur. | `shnetworklevel.admin` |
+| `/shnetworklevel exp <give\|take\|set> <joueur> <nombre>` | — | Modifie l'exp. Un `give` ou un `set` fait monter de niveau tant que l'exp atteint le seuil. | `shnetworklevel.admin.exp` |
+| `/shnetworklevel level <give\|take\|set> <joueur> <nombre>` | — | Modifie le niveau sans toucher à l'exp. | `shnetworklevel.admin.level` |
+| `/shnetworklevel info <joueur>` | — | Niveau et exp du joueur. | `shnetworklevel.admin.info` |
+| `/shnetworklevel reload` | — | Recharge `config.yml` et `messages.yml` ; si l'un est invalide, rien ne change et le message donne le fichier et l'erreur. `database` et `reseau` demandent un redémarrage. | `shnetworklevel.admin.reload` |
+
+Toutes marchent depuis la console : d'autres plugins lancent `shnetworklevel exp give <joueur> <nombre>` pour leurs récompenses. `/shnetworklevel` sans argument donne une ligne d'usage limitée aux sous-commandes autorisées.
+
+## Permissions
+
+| Permission | Description | Par défaut |
+|---|---|---|
+| `shnetworklevel.admin` | Toutes les sous-commandes (parent des quatre suivantes). | `op` |
+| `shnetworklevel.admin.exp` | `/shnetworklevel exp` | `op` |
+| `shnetworklevel.admin.level` | `/shnetworklevel level` | `op` |
+| `shnetworklevel.admin.info` | `/shnetworklevel info` | `op` |
+| `shnetworklevel.admin.reload` | `/shnetworklevel reload` | `op` |
 
 Placeholders : `%shnetworklevel_level%`, `%shnetworklevel_exp%`, `%shnetworklevel_expneeded%`, `%shnetworklevel_progressbar%`.
 
-À chaque niveau gagné, le joueur reçoit le message `messages.level-up`, entend le son de `sounds.levelup` et les commandes de `rewards` sont exécutées pour lui. Un joueur hors ligne n'en reçoit pas.
+À chaque niveau gagné, le joueur reçoit le message `level-up` de `messages.yml`, entend le son de `sounds.levelup` et les commandes de `rewards` sont exécutées pour lui. Un joueur hors ligne n'en reçoit pas.
 
 ## Plusieurs serveurs avec SHNetwork
 
@@ -59,7 +72,8 @@ Fichiers par défaut repris du serveur (secrets remplacés par `CHANGE_ME`). Cli
 
 <pre>
 plugins/SHNetworkLevel/
-└── <a href="src/main/resources/config.yml">config.yml</a>
+├── <a href="src/main/resources/config.yml">config.yml</a>
+└── <a href="src/main/resources/messages.yml">messages.yml</a>
 </pre>
 
 ## Compilation

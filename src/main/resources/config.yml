@@ -6,11 +6,20 @@
 # shnetworklevel de MariaDB (une ligne par pseudo), avec récompenses de level-up, son, barre de
 # progression et placeholders.
 #
-# Commandes (permission shnetworklevel.admin) :
+# Commandes (racine /shnetworklevel, pas d'alias) :
 #   /shnetworklevel exp <give|take|set> <joueur> <nombre>     Modifie l'exp. Un give ou un set fait monter de niveau
 #                                                             tant que l'exp atteint le seuil.
 #   /shnetworklevel level <give|take|set> <joueur> <nombre>   Modifie le niveau sans toucher à l'exp.
 #   /shnetworklevel info <joueur>                             Niveau et exp du joueur.
+#   /shnetworklevel reload                                    Recharge config.yml et messages.yml.
+# Les autres plugins l'appellent en console (récompenses) : « shnetworklevel exp give <joueur> <nombre> ».
+#
+# Permissions (op par défaut) :
+#   shnetworklevel.admin          Toutes les sous-commandes.
+#   shnetworklevel.admin.exp      /shnetworklevel exp
+#   shnetworklevel.admin.level    /shnetworklevel level
+#   shnetworklevel.admin.info     /shnetworklevel info
+#   shnetworklevel.admin.reload   /shnetworklevel reload
 #
 # Placeholders :
 #   %shnetworklevel_exp%          La quantité d'exp du joueur
@@ -18,8 +27,10 @@
 #   %shnetworklevel_expneeded%    Le total d'exp nécessaire pour passer au niveau suivant
 #   %shnetworklevel_progressbar%  Une barre de progression visuelle basée sur la quantité d'exp actuelle par rapport au seuil requis
 #
-# Les textes des messages sont dans la section 'messages' de ce fichier.
-# Demande un redémarrage : database, reseau.
+# Les textes des messages sont dans messages.yml.
+# Un reload valide config.yml et messages.yml avant de les appliquer : si l'un est invalide, rien ne change et le message
+# donne le fichier et l'erreur. Progression, récompenses, son, barre de progression et valeurs par défaut sont lus à
+# chaque usage. Demande un redémarrage : database, reseau.
 #
 # ======================================================================== #
 
@@ -32,30 +43,17 @@ database:
   username: utilisateur
   password: "CHANGE_ME"
 
-# Messages et usages configurables
-messages:
-  no-permission: "&8&l« &f&lSH &8&l» &fCommande inconnue, essayer autre chose."
-  invalid-number: "&cLe nombre fourni est invalide."
-  usage:
-    main: "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel <exp/level/info> ..."
-    exp: "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel exp <give/take/set> <player> <number>"
-    level: "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel level <give/take/set> <player> <number>"
-    info: "&7&l« &e&lSH &8&l» &7Usage: &e/shnetworklevel info <player>"
-  exp-given: "&7&l« &a&lSH &8&l» &7Vous avez donné &a%amount% exp de network &7à &a%player%"
-  exp-taken: "&7&l« &6&lSH &8&l» &7Vous avez retiré &6%amount% exp &7à &6%player%"
-  exp-set: "&7&l« &6&lSH &8&l» &7L'exp de &6%player% &7a été définie à &6%amount%"
-  level-given: "&7&l« &a&lSH &8&l» &7Vous avez donné &a%amount% niveaux &7à &a%player%"
-  level-taken: "&7&l« &6&lSH &8&l» &7Vous avez retiré &6%amount% niveaux &7à &6%player%"
-  level-set: "&7&l« &6&lSH &8&l» &7Le niveau de &6%player% &7est défini à &6%amount%"
-  level-up: "&7&l« &5&lSH &8&l» &fFélicitations &5%player% &f! Vous avez gagné un &5niveau de network&f ! &7(/network)"
-  info: "&7&l« &e&lSH &8&l» &e%player% &7est niveau &e%level% &7avec &e%exp% exp"
-
 # Variables de progression
 progression:
   type: "exponential"        # "linear" ou "exponential"
   base: 100
   increment: 50         # pour la progression linéaire
   multiplier: 1.50       # pour la progression exponentielle
+
+# Niveau et exp d'un joueur sans ligne en base.
+default-values:
+  level: 0
+  exp: 0
 
 # Commandes de récompense lors d'un level-up
 rewards:
