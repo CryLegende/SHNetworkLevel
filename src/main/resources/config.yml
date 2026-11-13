@@ -40,10 +40,9 @@
 
 # Paramètres de connexion à MariaDB
 database:
-  # host: 138.201.251.202
   host: 127.0.0.1
   port: 3306
-  database: Global?autoReconnect=true&useSSL=false
+  database: minecraft
   username: utilisateur
   password: "CHANGE_ME"
 
@@ -62,7 +61,7 @@ default-values:
 # Commandes de récompense lors d'un level-up
 rewards:
   levelup-commands: # Variables: %player% et %level%
-    - "bungeee lpb user %player% permission set ajqueue.priority.%level%"
+    - "give %player% diamond 1"
 
 # Configuration du son de level-up
 sounds:
