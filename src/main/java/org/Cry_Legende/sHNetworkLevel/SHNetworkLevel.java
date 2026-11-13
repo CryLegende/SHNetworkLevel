@@ -59,6 +59,10 @@ public class SHNetworkLevel extends JavaPlugin {
     private NetworkLevels net;
     // Textes de messages.yml, remplacés d'un bloc à chaque chargement
     private volatile YamlConfiguration messages = new YamlConfiguration();
+    // Bonus des cosmétiques équipés (section bonus), relu au reload
+    private volatile CosmeticBonus bonus = CosmeticBonus.NONE;
+    // Fraction d'exp de bonus pas encore donnée, par joueur connecté
+    private final ConcurrentHashMap<String, Double> bonusCarry = new ConcurrentHashMap<>();
 
     private static final String MESSAGES_FILE = "messages.yml";
 
@@ -68,6 +72,7 @@ public class SHNetworkLevel extends JavaPlugin {
         saveDefaultConfig();
         loadMessages();
         FileConfiguration config = getConfig();
+        bonus = CosmeticBonus.read(config.getConfigurationSection("bonus"));
 
         // Récupération des paramètres de connexion à la base de données depuis la config
         String host = config.getString("database.host", "localhost");
@@ -207,7 +212,20 @@ public class SHNetworkLevel extends JavaPlugin {
                 send(sender, msg("invalid-number", "&cLe nombre fourni est invalide."));
                 return true;
             }
-            changeAsync(sender, "exp", action, targetNameInput, amount);
+            // Récompense donnée par la console à un joueur connecté ici : bonus de ses cosmétiques équipés
+            int given = amount;
+            int percent = 0;
+            Player rewarded = action.equals("give") && amount > 0 && !(sender instanceof Player)
+                ? Bukkit.getPlayerExact(targetNameInput) : null;
+            if (rewarded != null) {
+                percent = bonus.percent(rewarded);
+                if (percent > 0) {
+                    LevelRules.Boost boost = LevelRules.boost(amount, percent, bonusCarry.getOrDefault(rewarded.getName(), 0.0));
+                    bonusCarry.put(rewarded.getName(), boost.carry());
+                    given = boost.amount();
+                }
+            }
+            changeAsync(sender, "exp", action, targetNameInput, given, percent);
             return true;
 
         } else if (sub.equals("level")) {
@@ -228,7 +246,7 @@ public class SHNetworkLevel extends JavaPlugin {
                 send(sender, msg("invalid-number", "&cLe nombre fourni est invalide."));
                 return true;
             }
-            changeAsync(sender, "level", action, targetNameInput, amount);
+            changeAsync(sender, "level", action, targetNameInput, amount, 0);
             return true;
 
         } else {
@@ -378,6 +396,7 @@ public class SHNetworkLevel extends JavaPlugin {
         }
         reloadConfig();
         applyMessages(newMessages);
+        bonus = CosmeticBonus.read(getConfig().getConfigurationSection("bonus"));
         return true;
     }
 
@@ -437,7 +456,7 @@ public class SHNetworkLevel extends JavaPlugin {
      * Sans SHNetwork, les valeurs du cache sont modifiées puis réécrites (REPLACE). Avec SHNetwork, la ligne est
      * relue sous verrou et modifiée, pour que deux serveurs qui écrivent en même temps s'additionnent.
      */
-    private void changeAsync(CommandSender sender, String kind, String action, String targetNameInput, int amount) {
+    private void changeAsync(CommandSender sender, String kind, String action, String targetNameInput, int amount, int bonusPercent) {
         final String usageKey = "usage." + kind;
         final String usageDefault = "&cUsage: /shnetworklevel " + kind + " <give/take/set> <player> <number>";
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
@@ -507,7 +526,8 @@ public class SHNetworkLevel extends JavaPlugin {
                 String msgKey = kind + "-" + (action.equals("give") ? "given" : action.equals("take") ? "taken" : "set");
                 String msgTemplate = msg(msgKey, "&aCommande exécutée.");
                 final String formattedMsg = msgTemplate.replace("%player%", targetNameInput) // Utiliser le nom tapé par l'admin
-                    .replace("%amount%", String.valueOf(amount));
+                    .replace("%amount%", String.valueOf(amount))
+                    .replace("%bonus%", bonusText(bonusPercent));
                 sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedMsg));
 
                 // Si le level a augmenté (give, ou set d'exp/de niveau plus élevé) : notifier et récompenser le joueur
@@ -536,6 +556,44 @@ public class SHNetworkLevel extends JavaPlugin {
                 if (net == null) evictIfOffline(target.offline(), playerName);
             });
         });
+    }
+
+    /** « (+15%) » quand le bonus est positif (bonus.texte), sinon bonus.texte-aucun. */
+    String bonusText(int percent) {
+        return percent > 0
+            ? msg("bonus.texte", " (+%bonus%%)").replace("%bonus%", String.valueOf(percent))
+            : msg("bonus.texte-aucun", "");
+    }
+
+    /**
+     * Placeholders du bonus, sans lecture de la base : bonus, bonus_texte, bonus_&lt;source&gt; (pourcentage si équipée,
+     * sinon 0) et bonus_&lt;source&gt;_etat (ligne de menu). Rend null pour un autre identifiant.
+     */
+    String bonusPlaceholder(Player player, String identifier) {
+        String id = identifier.toLowerCase(Locale.ROOT);
+        if (id.equals("bonus")) {
+            return String.valueOf(bonus.percent(player));
+        }
+        if (id.equals("bonus_texte")) {
+            return bonusText(bonus.percent(player));
+        }
+        if (!id.startsWith("bonus_")) {
+            return null;
+        }
+        boolean state = id.endsWith("_etat");
+        String sourceId = id.substring("bonus_".length(), state ? id.length() - "_etat".length() : id.length());
+        CosmeticBonus.Source source = bonus.source(sourceId);
+        if (source == null) {
+            return null;
+        }
+        boolean active = bonus.active(player, source);
+        if (!state) {
+            return String.valueOf(active ? source.percent() : 0);
+        }
+        String line = active
+            ? msg("bonus.source-active", "&a✔ &f%nom% &a+%pourcentage%%")
+            : msg("bonus.source-inactive", "&8✘ &7%nom% &8+%pourcentage%%");
+        return line.replace("%nom%", source.name()).replace("%pourcentage%", String.valueOf(source.percent()));
     }
 
     private void databaseError(CommandSender sender, String playerName, SQLException e) {
@@ -777,6 +835,7 @@ public class SHNetworkLevel extends JavaPlugin {
             // Optionnel: Sauvegarder les données ici si elles ne sont pas sauvegardées régulièrement ailleurs.
             // Actuellement, les données sont sauvegardées à chaque commande de modification.
             // Retirer du cache pour libérer de la mémoire.
+            bonusCarry.remove(playerName);
             PlayerData data = playerCache.remove(playerName);
             if (data != null) {
                 getLogger().info("Données déchargées du cache pour " + playerName + " lors de la déconnexion.");
@@ -818,8 +877,8 @@ public class SHNetworkLevel extends JavaPlugin {
 
     /**
      * Expansion PlaceholderAPI pour exposer les placeholders :
-     * %shnetworklevel_level%, %shnetworklevel_exp%, %shnetworklevel_expneeded%, %shnetworklevel_progressbar%
-     * NON MODIFIÉE SELON LA DEMANDE
+     * %shnetworklevel_level%, %shnetworklevel_exp%, %shnetworklevel_expneeded%, %shnetworklevel_progressbar%, et ceux du
+     * bonus des cosmétiques (voir bonusPlaceholder).
      */
     public class SHNetworkLevelPlaceholderExpansion extends PlaceholderExpansion {
         private SHNetworkLevel plugin;
@@ -857,6 +916,10 @@ public class SHNetworkLevel extends JavaPlugin {
         public String onRequest(OfflinePlayer player, String identifier) {
             if (player == null || player.getName() == null) { // Vérification plus robuste
                 return "";
+            }
+            if (identifier.toLowerCase(Locale.ROOT).startsWith("bonus")) {
+                // Cosmétiques lus sur le joueur connecté ici ; hors ligne, aucun bonus
+                return plugin.bonusPlaceholder(player.getPlayer(), identifier);
             }
             // Pas d'appel DB sur le thread principal : voir cachedData
             PlayerData data = plugin.cachedData(player.getName());

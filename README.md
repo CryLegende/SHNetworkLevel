@@ -43,7 +43,22 @@ Toutes marchent depuis la console : d'autres plugins lancent `shnetworklevel exp
 | `shnetworklevel.admin.info` | `/shnetworklevel info` | `op` |
 | `shnetworklevel.admin.reload` | `/shnetworklevel reload` | `op` |
 
-Placeholders : `%shnetworklevel_level%`, `%shnetworklevel_exp%`, `%shnetworklevel_expneeded%`, `%shnetworklevel_progressbar%`.
+Placeholders : `%shnetworklevel_level%`, `%shnetworklevel_exp%`, `%shnetworklevel_expneeded%`, `%shnetworklevel_progressbar%`, et ceux du bonus ci-dessous.
+
+## Bonus des cosmétiques
+
+Chaque cosmétique équipé ajoute un pourcentage à l'exp gagnée (section `bonus` de `config.yml` : +5 % pour un titre, +5 % pour un compagnon, +5 % pour des particules, donc +15 % avec les trois). Une source est un placeholder : elle compte quand il rend autre chose qu'un texte vide ou qu'une des `valeurs-vides` (`%shtitres_id%`, `%shcompagnons_current_pet_type%`, `%playerparticles_active_amount%`). Sans PlaceholderAPI ou sans le plugin du placeholder, elle ne compte pas.
+
+- Le bonus s'applique à `exp give` lancé par la console (les récompenses des autres plugins) pour un joueur connecté sur ce serveur. Une commande tapée par un joueur donne le nombre exact.
+- Les fractions ne se perdent pas : +1 avec 15 % donne 1, et la septième fois 2. Elles sont gardées jusqu'à la déconnexion.
+- Les messages de gain des autres plugins affichent le bonus avec `%shnetworklevel_bonus_texte%` juste après « exp de network » : `&b+10 exp de network%shnetworklevel_bonus_texte% &7(/network)` donne « +10 exp de network (+15%) (/network) ».
+
+| Placeholder | Rend |
+|---|---|
+| `%shnetworklevel_bonus%` | Bonus total en pourcentage (`15`) |
+| `%shnetworklevel_bonus_texte%` | ` (+15%)`, vide sans bonus (`bonus.texte` et `bonus.texte-aucun` de `messages.yml`) |
+| `%shnetworklevel_bonus_<source>%` | Pourcentage de la source si elle est équipée, sinon `0` |
+| `%shnetworklevel_bonus_<source>_etat%` | Ligne de menu `✔ Titre +5%` ou `✘ Titre +5%` (`bonus.source-active` et `bonus.source-inactive`) |
 
 À chaque niveau gagné, le joueur reçoit le message `level-up` de `messages.yml`, entend le son de `sounds.levelup` et les commandes de `rewards` sont exécutées pour lui. Un joueur hors ligne n'en reçoit pas.
 

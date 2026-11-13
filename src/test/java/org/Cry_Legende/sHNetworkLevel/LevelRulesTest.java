@@ -69,4 +69,29 @@ class LevelRulesTest {
         assertEquals(4, data.level);
         assertEquals(77, data.exp);
     }
+
+    @Test
+    void bonusArrondiSansPerte() {
+        assertEquals(23, LevelRules.boost(20, 15, 0).amount());
+        assertEquals(0.0, LevelRules.boost(20, 15, 0).carry(), 1e-9);
+        assertEquals(115, LevelRules.boost(100, 15, 0).amount());
+        assertEquals(10, LevelRules.boost(10, 0, 0).amount());
+
+        // +1 avec 15 % : 1 à chaque fois, la fraction s'accumule et donne 2 au septième gain
+        double carry = 0;
+        int total = 0;
+        for (int i = 0; i < 7; i++) {
+            LevelRules.Boost boost = LevelRules.boost(1, 15, carry);
+            carry = boost.carry();
+            total += boost.amount();
+        }
+        assertEquals(8, total);
+        assertTrue(carry >= 0 && carry < 1);
+    }
+
+    @Test
+    void bonusIgnoreUnGainNul() {
+        assertEquals(0, LevelRules.boost(0, 15, 0.5).amount());
+        assertEquals(0.5, LevelRules.boost(0, 15, 0.5).carry(), 1e-9);
+    }
 }

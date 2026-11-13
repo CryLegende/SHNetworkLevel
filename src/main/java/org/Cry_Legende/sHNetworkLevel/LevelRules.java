@@ -53,6 +53,27 @@ final class LevelRules {
         return true;
     }
 
+    /** Exp réellement donnée après un bonus, et la fraction d'exp gardée pour le prochain gain. */
+    record Boost(int amount, double carry) {
+    }
+
+    /**
+     * Applique un bonus en pourcentage à un gain d'exp. Les fractions ne se perdent pas : elles s'ajoutent au gain suivant
+     * (+1 avec 15 % donne 1, puis 1 à nouveau, et la septième fois 2).
+     *
+     * @param carry fraction d'exp gardée par le gain précédent, entre 0 et 1
+     */
+    static Boost boost(int amount, int percent, double carry) {
+        if (amount <= 0 || percent <= 0) {
+            return new Boost(amount, carry);
+        }
+        double total = amount * (100.0 + percent) / 100.0 + Math.max(0.0, Math.min(carry, 0.999999));
+        // Marge contre l'arrondi des doubles : 20 × 1,15 doit donner 23, pas 22,999…
+        long given = (long) Math.floor(total + 1e-9);
+        double rest = Math.max(0.0, total - given);
+        return new Boost((int) Math.min(Integer.MAX_VALUE, given), rest < 1e-9 ? 0.0 : rest);
+    }
+
     private static void levelUp(PlayerData data, IntUnaryOperator needed) {
         while (data.exp >= needed.applyAsInt(data.level)) {
             data.exp -= needed.applyAsInt(data.level);

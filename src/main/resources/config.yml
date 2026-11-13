@@ -26,11 +26,15 @@
 #   %shnetworklevel_level%        Le niveau du joueur
 #   %shnetworklevel_expneeded%    Le total d'exp nécessaire pour passer au niveau suivant
 #   %shnetworklevel_progressbar%  Une barre de progression visuelle basée sur la quantité d'exp actuelle par rapport au seuil requis
+#   %shnetworklevel_bonus%                  Bonus d'exp des cosmétiques équipés, en pourcentage (15)
+#   %shnetworklevel_bonus_texte%            « (+15%) » à mettre dans un message de gain, vide sans bonus (messages.yml : bonus)
+#   %shnetworklevel_bonus_<source>%         Pourcentage de la source si le cosmétique est équipé, sinon 0 (titre, compagnon...)
+#   %shnetworklevel_bonus_<source>_etat%    Ligne de menu : source équipée ou non avec son pourcentage (messages.yml : bonus)
 #
 # Les textes des messages sont dans messages.yml.
 # Un reload valide config.yml et messages.yml avant de les appliquer : si l'un est invalide, rien ne change et le message
 # donne le fichier et l'erreur. Progression, récompenses, son, barre de progression et valeurs par défaut sont lus à
-# chaque usage. Demande un redémarrage : database, reseau.
+# chaque usage, le bonus au reload. Demande un redémarrage : database, reseau.
 #
 # ======================================================================== #
 
@@ -73,6 +77,32 @@ Progress-bar:
   Character: "■"
   Complete: "&5"
   Remaining: "&7"
+
+# Bonus d'exp de network des cosmétiques équipés. Chaque source équipée ajoute son pourcentage à l'exp donnée par
+# « exp give » quand la commande vient de la console (récompenses des autres plugins) et que le joueur est connecté sur
+# ce serveur. Une commande tapée par un joueur donne le nombre exact. Une source compte comme équipée quand son
+# placeholder rend autre chose qu'un texte vide ou qu'une des valeurs-vides ; sans PlaceholderAPI ou sans le plugin du
+# placeholder, elle ne compte pas. Les fractions d'exp de bonus sont gardées jusqu'au gain suivant du joueur.
+bonus:
+  actif: true
+  valeurs-vides:
+    - "0"
+    - "false"
+    - "none"
+    - "aucun"
+  sources:
+    titre:
+      nom: "Titre"
+      placeholder: "%shtitres_id%"
+      pourcentage: 5
+    compagnon:
+      nom: "Compagnon"
+      placeholder: "%shcompagnons_current_pet_type%"
+      pourcentage: 5
+    particules:
+      nom: "Particules"
+      placeholder: "%playerparticles_active_amount%"
+      pourcentage: 5
 
 # Plusieurs serveurs Opale avec SHNetwork. Sans SHNetwork, ou avec 'actif: false', le plugin fonctionne comme sur
 # un serveur seul : les valeurs du joueur sont gardées en cache et réécrites en entier à chaque commande.
