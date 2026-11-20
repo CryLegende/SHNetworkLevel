@@ -31,7 +31,7 @@ Utilisé sur : **Opale · Lobby**.
 | `/shnetworklevel info <joueur>` | — | Niveau et exp du joueur. | `shnetworklevel.admin.info` |
 | `/shnetworklevel reload` | — | Recharge `config.yml` et `messages.yml` ; si l'un est invalide, rien ne change et le message donne le fichier et l'erreur. `database` et `reseau` demandent un redémarrage. | `shnetworklevel.admin.reload` |
 
-Toutes marchent depuis la console : d'autres plugins lancent `shnetworklevel exp give <joueur> <nombre>` pour leurs récompenses. `/shnetworklevel` sans argument donne une ligne d'usage limitée aux sous-commandes autorisées.
+Toutes marchent depuis la console : d'autres plugins lancent `shnetworklevel exp give <joueur> <nombre>` pour leurs récompenses. Depuis la console, `give`, `take` et `set` ne répondent qu'en cas d'erreur. `/shnetworklevel` sans argument donne une ligne d'usage limitée aux sous-commandes autorisées.
 
 ## Permissions
 

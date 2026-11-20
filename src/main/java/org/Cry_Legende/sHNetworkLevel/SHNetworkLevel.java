@@ -34,6 +34,8 @@ import org.bukkit.Registry;
 import org.bukkit.Sound;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
+import org.bukkit.command.ConsoleCommandSender;
+import org.bukkit.command.RemoteConsoleCommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.event.Listener;
 import org.bukkit.event.EventHandler;
@@ -92,9 +94,12 @@ public class SHNetworkLevel extends JavaPlugin {
         hikariConfig.setDriverClassName("org.mariadb.jdbc.Driver");
         // Test de validité de la connexion
         hikariConfig.setConnectionTestQuery("SELECT 1");
-        // Timeout d'inactivité et taille maximum du pool
-        hikariConfig.setIdleTimeout(300000); // 5 minutes
+        // Pool nommé (il apparaît sous ce nom dans la console) : 2 connexions gardées, jusqu'à 10 en pointe,
+        // celles en trop fermées après 5 minutes d'inactivité
+        hikariConfig.setPoolName("SHNetworkLevel");
+        hikariConfig.setMinimumIdle(2);
         hikariConfig.setMaximumPoolSize(10);
+        hikariConfig.setIdleTimeout(300000);
 
         dataSource = new HikariDataSource(hikariConfig);
 
@@ -104,7 +109,6 @@ public class SHNetworkLevel extends JavaPlugin {
                  "CREATE TABLE IF NOT EXISTS shnetworklevel (name VARCHAR(16) NOT NULL PRIMARY KEY, level INT NOT NULL, exp INT NOT NULL)"
              )) {
             ps.executeUpdate();
-            getLogger().info("Table shnetworklevel vérifiée/créée.");
         } catch (SQLException e) {
             getLogger().severe("Impossible de créer ou vérifier la table shnetworklevel !");
             e.printStackTrace();
@@ -122,7 +126,6 @@ public class SHNetworkLevel extends JavaPlugin {
         if (Bukkit.getPluginManager().getPlugin("PlaceholderAPI") != null) {
             expansion = new SHNetworkLevelPlaceholderExpansion(this);
             expansion.register();
-            getLogger().info("Hook PlaceholderAPI enregistré.");
         }
 
         enableNetwork();
@@ -528,7 +531,11 @@ public class SHNetworkLevel extends JavaPlugin {
                 final String formattedMsg = msgTemplate.replace("%player%", targetNameInput) // Utiliser le nom tapé par l'admin
                     .replace("%amount%", String.valueOf(amount))
                     .replace("%bonus%", bonusText(bonusPercent));
-                sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedMsg));
+                // La console (votes, quêtes, site) en lance des centaines par jour : pas de compte rendu, seulement les erreurs
+                final boolean console = sender instanceof ConsoleCommandSender || sender instanceof RemoteConsoleCommandSender;
+                if (!console) {
+                    sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedMsg));
+                }
 
                 // Si le level a augmenté (give, ou set d'exp/de niveau plus élevé) : notifier et récompenser le joueur
                 if (newLevel > oldLevel) {
@@ -539,7 +546,7 @@ public class SHNetworkLevel extends JavaPlugin {
                         final String formattedLvlMsg = lvlMsgTemplate.replace("%player%", playerName) // Utiliser le nom canonique
                             .replace("%level%", String.valueOf(lvl));
 
-                        if (!(sender instanceof Player) || !((Player) sender).getName().equals(playerName)) {
+                        if (!console && (!(sender instanceof Player) || !((Player) sender).getName().equals(playerName))) {
                             sender.sendMessage(ChatColor.translateAlternateColorCodes('&', formattedLvlMsg));
                         }
 
@@ -821,7 +828,6 @@ public class SHNetworkLevel extends JavaPlugin {
             // Charger les données de manière asynchrone pour ne pas ralentir la connexion
             Bukkit.getScheduler().runTaskAsynchronously(SHNetworkLevel.this, () -> {
                 getPlayerData(playerName); // Cela va charger depuis la DB et mettre en cache si pas déjà fait
-                getLogger().info("Données chargées pour " + playerName + " lors de la connexion.");
                 // Parti pendant le chargement : l'événement de départ est déjà passé, l'entrée resterait en cache
                 if (!event.getPlayer().isOnline()) {
                     playerCache.remove(playerName);
@@ -836,10 +842,7 @@ public class SHNetworkLevel extends JavaPlugin {
             // Actuellement, les données sont sauvegardées à chaque commande de modification.
             // Retirer du cache pour libérer de la mémoire.
             bonusCarry.remove(playerName);
-            PlayerData data = playerCache.remove(playerName);
-            if (data != null) {
-                getLogger().info("Données déchargées du cache pour " + playerName + " lors de la déconnexion.");
-            }
+            playerCache.remove(playerName);
         }
     }
 

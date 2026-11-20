@@ -12,7 +12,8 @@
 #   /shnetworklevel level <give|take|set> <joueur> <nombre>   Modifie le niveau sans toucher à l'exp.
 #   /shnetworklevel info <joueur>                             Niveau et exp du joueur.
 #   /shnetworklevel reload                                    Recharge config.yml et messages.yml.
-# Les autres plugins l'appellent en console (récompenses) : « shnetworklevel exp give <joueur> <nombre> ».
+# Les autres plugins l'appellent en console (récompenses) : « shnetworklevel exp give <joueur> <nombre> ». Depuis la
+# console, give, take et set ne répondent qu'en cas d'erreur.
 #
 # Permissions (op par défaut) :
 #   shnetworklevel.admin          Toutes les sous-commandes.
